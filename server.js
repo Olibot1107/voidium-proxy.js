@@ -1,91 +1,95 @@
 const express = require('express');
-const fs = require('fs');
+const { loadConfig, normalizeConfig } = require('./lib/config');
+const { matchTarget } = require('./lib/routing');
+const { log, maskHeaders } = require('./lib/logger');
+const { parseCookies, sanitizeCookieKey } = require('./lib/suspicion');
+const { proxyRequest } = require('./lib/proxy');
+
 const app = express();
 
-const config = JSON.parse(fs.readFileSync('./config.json'));
+const CONSENT_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+const CONSENT_COOKIE_PREFIX = 'proxy_consent_';
 
-app.use(async (req, res, next) => {
-    const domain = req.get('host');
-    const domaincut = domain.split(config.domaincut)[1];
+let requestCounter = 0;
 
-    console.log('Domain:', domain);
-    console.log('Cut:', domaincut);
+const { config, source: configSource } = loadConfig();
+const normalizedConfig = normalizeConfig(config, configSource);
+log('info', 'Config loaded', { source: configSource, targets: normalizedConfig.targets.map(t => t.name) });
 
-    if (domaincut && domaincut.startsWith(config.pyro.letter)) {
+app.use(async (req, res) => {
+    const reqId = ++requestCounter;
+    const start = Date.now();
+    const domain = req.get('host') || '';
+    const domaincut = domain.startsWith(normalizedConfig.domaincut)
+        ? domain.slice(normalizedConfig.domaincut.length)
+        : '';
 
-        const pyroPort = parseInt(domaincut.slice(1));
+    log('info', 'Incoming request', {
+        id: reqId,
+        method: req.method,
+        url: req.originalUrl,
+        host: domain,
+        cut: domaincut,
+        ip: req.ip
+    });
+    log('debug', 'Request headers', { id: reqId, headers: maskHeaders(req.headers) });
 
-        if (!isNaN(pyroPort)) {
-            console.log('Pyro Port:', pyroPort);
-
-            const coede = await fetchweb(
-                `http://${config.pyro.host}:${pyroPort}${req.originalUrl}`,
-                req
-            );
-
-            res.status(coede.status);
-
-            for (const key in coede.headers) {
-                if (key.toLowerCase() === 'set-cookie') {
-                    res.setHeader('set-cookie', coede.headers[key]);
-                } else {
-                    res.setHeader(key, coede.headers[key]);
-                }
-            }
-
-            return res.send(coede.body);
-        } else {
-            console.log('Pyro Port: Not a number');
-            return res.status(400).send('Pyro Port: Not a number');
-        }
+    const match = matchTarget(domaincut, normalizedConfig.targets);
+    if (match.error) {
+        log('warn', 'Target error', { id: reqId, error: match.error });
+        return res.status(404).send(match.error);
     }
 
-    res.send('welllll this is a wherd one ant it?');
+    const { target, port } = match;
+    const cookies = parseCookies(req.headers.cookie || '');
+    const consentKey = CONSENT_COOKIE_PREFIX + sanitizeCookieKey(target.name);
+    const hasConsent = cookies[consentKey] === '1';
+
+    if (Number.isInteger(target.portStart) && port < target.portStart) {
+        log('warn', 'Port out of range (low)', { id: reqId, port, min: target.portStart, target: target.name });
+        return res.status(400).send('Port out of range');
+    }
+    if (Number.isInteger(target.portEnd) && port > target.portEnd) {
+        log('warn', 'Port out of range (high)', { id: reqId, port, max: target.portEnd, target: target.name });
+        return res.status(400).send('Port out of range');
+    }
+
+    log('info', 'Routing decision', { id: reqId, target: target.name, host: target.host, port });
+
+    res.on('finish', () => {
+        const ms = Date.now() - start;
+        log('info', 'Response sent', {
+            id: reqId,
+            status: res.statusCode,
+            ms
+        });
+    });
+
+    if (req.path === '/__proxy-consent' && req.method === 'GET') {
+        const nextParam = req.query?.next;
+        const nextUrl = typeof nextParam === 'string' && nextParam.startsWith('/')
+            ? nextParam
+            : '/';
+        log('info', 'Consent accepted', { id: reqId, target: target.name, next: nextUrl });
+        res.cookie(consentKey, '1', {
+            maxAge: CONSENT_MAX_AGE_SECONDS * 1000,
+            httpOnly: true,
+            sameSite: 'lax',
+            path: '/'
+        });
+        return res.redirect(302, nextUrl);
+    }
+
+    return await proxyRequest(
+        `http://${target.host}:${port}${req.originalUrl}`,
+        req,
+        res,
+        reqId,
+        { target, hasConsent }
+    );
 });
 
-async function fetchweb(url, req) {
-    try {
-
-        const headers = {
-            'cookie': req.headers.cookie || '',
-            'user-agent': req.headers['user-agent'] || '',
-            'accept': req.headers['accept'] || '*/*'
-        };
-
-        const response = await fetch(url, {
-            method: req.method,
-            headers: headers
-        });
-
-        const outHeaders = {};
-
-        response.headers.forEach((value, key) => {
-            if (key.toLowerCase() === 'set-cookie') {
-                outHeaders[key] = response.headers.getSetCookie
-                    ? response.headers.getSetCookie()
-                    : [value];
-            } else {
-                outHeaders[key] = value;
-            }
-        });
-
-        return {
-            status: response.status,
-            headers: outHeaders,
-            body: await response.text()
-        };
-
-    } catch (error) {
-        console.log('Fetch error:', error);
-
-        return {
-            status: 502,
-            headers: { "content-type": "text/plain" },
-            body: "welll i did not expect this to happen"
-        };
-    }
-}
-
-app.listen(1234, () => {
-    console.log('Example app listening on port 1234!');
+const PORT = Number(process.env.PORT) || 1234;
+app.listen(PORT, () => {
+    log('info', `Proxy listening on port ${PORT} using ${configSource}`);
 });
