@@ -110,8 +110,9 @@ async function main() {
             return res.redirect(302, nextUrl);
         }
 
+        const scheme = target.scheme || 'http';
         return await proxyRequest(
-            `http://${target.host}:${port}${req.originalUrl}`,
+            `${scheme}://${target.host}:${port}${req.originalUrl}`,
             req,
             res,
             reqId,
