@@ -1,6 +1,6 @@
 # voidium-proxy
 
-A lightweight HTTP proxy that routes requests based on the host name, with per-target ports, safety warnings for suspicious pages, and verbose structured logging.
+A lightweight HTTP proxy that routes requests based on the host name, with per-target ports, safety warnings for suspicious pages, verbose structured logging, and an admin API for custom domains.
 
 ## How It Routes
 
@@ -25,6 +25,8 @@ Create `config.json` (or use `eg.config.json`). You can use `targets` (preferred
 ```json
 {
   "domaincut": ".voidium.uk",
+  "masterToken": "change-me",
+  "customDomainsDb": "./custom-domains.sqlite",
   "targets": {
     "pyro": { "letter": "p", "host": "192.168.1.100", "portStart": 3000, "portEnd": 3999 },
     "byto": { "host": "192.168.1.101", "portStart": 4000, "portEnd": 4999 }
@@ -37,8 +39,41 @@ Create `config.json` (or use `eg.config.json`). You can use `targets` (preferred
 ```json
 {
   "domaincut": ".voidium.uk",
+  "masterToken": "change-me",
+  "customDomainsDb": "./custom-domains.sqlite",
   "pyro": { "letter": "p", "host": "192.168.1.100", "portStart": 3000, "portEnd": 3999 }
 }
+```
+
+## Custom Domains API
+
+You can create custom hostnames (like `name.c.voidium.uk`) that map to a specific target and port. These are stored in a SQLite database (`custom-domains.sqlite`).
+
+### Add a custom domain
+
+```
+POST /__proxy-admin/domains
+Authorization: Bearer <masterToken>
+Content-Type: application/json
+
+{ "domain": "name.c.voidium.uk", "target": "pyro", "port": 3007 }
+```
+
+### List all custom domains
+
+```
+GET /__proxy-admin/domains
+Authorization: Bearer <masterToken>
+```
+
+### Remove a custom domain
+
+```
+DELETE /__proxy-admin/domains
+Authorization: Bearer <masterToken>
+Content-Type: application/json
+
+{ "domain": "name.c.voidium.uk" }
 ```
 
 ## Safety Warning
@@ -85,4 +120,4 @@ PORT=8080 npm start
 ## Notes
 
 - This proxy does not terminate TLS. Run it behind a TLS terminator (like nginx or Caddy) if you need HTTPS.
-- The routing logic assumes the target port is embedded in the host name.
+- The routing logic assumes the target port is embedded in the host name (unless using a custom domain mapping).
