@@ -1,0 +1,9 @@
+{
+  "domaincut": "localhost:",
+  "pyro": {
+    "letter": "p",
+    "host": "127.0.0.1",
+    "portStart": 3000,
+    "portEnd": 3000
+  }
+}
