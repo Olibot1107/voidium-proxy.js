@@ -20,8 +20,8 @@ app.use(async (req, res) => {
     const reqId = ++requestCounter;
     const start = Date.now();
     const domain = req.get('host') || '';
-    const domaincut = domain.startsWith(normalizedConfig.domaincut)
-        ? domain.slice(normalizedConfig.domaincut.length)
+    const domaincut = domain.endsWith(normalizedConfig.domaincut)
+        ? domain.slice(0, -normalizedConfig.domaincut.length)
         : '';
 
     log('info', 'Incoming request', {
